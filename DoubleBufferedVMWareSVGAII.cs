@@ -797,6 +797,7 @@ namespace CosmosKernel1
 
         public void Init()
         {
+            //Actually I don't know why multiply 4 maybe because 32 / 8 = 4.
             managedMemoryBlock = new ManagedMemoryBlock(width * height * 4);
             //managedMemoryBlock = new ManagedMemoryBlock(ReadRegister(Register.FrameBufferSize));
         }
