@@ -1,13 +1,13 @@
-﻿using Cosmos.Core;
+using Cosmos.Core;
 using Cosmos.HAL;
 using System;
 
-namespace CosmosKernel1
+namespace Cosmos.HAL.Drivers.PCI.Video
 {
     /// <summary>
     /// VMWareSVGAII class.
     /// </summary>
-    public class VMWareSVGAII
+    public class DoubleBufferedVMWareSVGAII
     {
         #region 没用的
 
@@ -483,28 +483,6 @@ namespace CosmosKernel1
         private uint capabilities;
 
         /// <summary>
-        /// Create new inctanse of the <see cref="VMWareSVGAII"/> class.
-        /// </summary>
-        public VMWareSVGAII()
-        {
-            device = (Cosmos.HAL.PCI.GetDevice(Cosmos.HAL.VendorID.VMWare, Cosmos.HAL.DeviceID.SVGAIIAdapter));
-            device.EnableMemory(true);
-            uint basePort = device.BaseAddressBar[0].BaseAddress;
-            IndexPort = new IOPort((ushort)(basePort + (uint)IOPortOffset.Index));
-            ValuePort = new IOPort((ushort)(basePort + (uint)IOPortOffset.Value));
-            BiosPort = new IOPort((ushort)(basePort + (uint)IOPortOffset.Bios));
-            IRQPort = new IOPort((ushort)(basePort + (uint)IOPortOffset.IRQ));
-
-            WriteRegister(Register.ID, (uint)ID.V2);
-            if (ReadRegister(Register.ID) != (uint)ID.V2)
-                return;
-
-            Video_Memory = new MemoryBlock(ReadRegister(Register.FrameBufferStart), ReadRegister(Register.VRamSize));
-            capabilities = ReadRegister(Register.Capabilities);
-            InitializeFIFO();
-        }
-
-        /// <summary>
         /// Initialize FIFO.
         /// </summary>
         protected void InitializeFIFO()
@@ -523,11 +501,9 @@ namespace CosmosKernel1
         /// <param name="width">Width.</param>
         /// <param name="height">Height.</param>
         /// <param name="depth">Depth.</param>
-        public void SetMode(uint width, uint height)
+        public void SetMode(uint width, uint height, uint depth = 32)
         {
             // Depth is color depth in bytes.
-            uint depth = 32;
-
             this.depth = (depth / 8);
             this.width = width;
             this.height = height;
@@ -791,41 +767,96 @@ namespace CosmosKernel1
             }
             WriteRegister(Register.CursorOn, (uint)(visible ? 1 : 0));
         }
+
+        /// <summary>
+        /// Create new inctanse of the <see cref="VMWareSVGAII"/> class.
+        /// </summary>
+        public DoubleBufferedVMWareSVGAII()
+        {
+            device = (Cosmos.HAL.PCI.GetDevice(Cosmos.HAL.VendorID.VMWare, Cosmos.HAL.DeviceID.SVGAIIAdapter));
+            device.EnableMemory(true);
+            uint basePort = device.BaseAddressBar[0].BaseAddress;
+            IndexPort = new IOPort((ushort)(basePort + (uint)IOPortOffset.Index));
+            ValuePort = new IOPort((ushort)(basePort + (uint)IOPortOffset.Value));
+            BiosPort = new IOPort((ushort)(basePort + (uint)IOPortOffset.Bios));
+            IRQPort = new IOPort((ushort)(basePort + (uint)IOPortOffset.IRQ));
+
+            WriteRegister(Register.ID, (uint)ID.V2);
+            if (ReadRegister(Register.ID) != (uint)ID.V2)
+                return;
+
+            Video_Memory = new MemoryBlock(ReadRegister(Register.FrameBufferStart), ReadRegister(Register.VRamSize));
+
+            capabilities = ReadRegister(Register.Capabilities);
+            InitializeFIFO();
+        }
         #endregion
 
+        /*
         ManagedMemoryBlock managedMemoryBlock;
 
-        public void Init()
+        private void Init()
         {
-            //Actually I don't know why multiply 4 maybe because 32 / 8 = 4.
-            managedMemoryBlock = new ManagedMemoryBlock(width * height * 4);
-            //managedMemoryBlock = new ManagedMemoryBlock(ReadRegister(Register.FrameBufferSize));
+            managedMemoryBlock = new ManagedMemoryBlock(ReadRegister(Register.FrameBufferSize));
         }
 
         public void _SetPixel(uint x, uint y, uint color)
         {
-            try
+            uint offset = (y * width + x) * depth;
+
+            Kernel.text = $"Last Offset: {offset}";
+
+            if (offset < managedMemoryBlock.Size && x < this.width)
             {
-                managedMemoryBlock.Write32(((y * width + x) * depth), color);
-            }
-            catch (Exception)
-            {
+                managedMemoryBlock.Write32(offset, color);
             }
         }
 
         public void _Clear(uint color)
         {
-            //managedMemoryBlock.Fill(color);
-            for (int i = 0; i < managedMemoryBlock.Size; i++)
-            {
-                managedMemoryBlock.Write32((uint)i, color);
-            }
+            managedMemoryBlock.Fill(color);
         }
 
         public void _Update()
         {
-            //managedMemoryBlock.Offset = ReadRegister(Register.FrameBufferStart);
             Video_Memory.Copy(managedMemoryBlock);
+            WriteToFifo((int)FIFOCommand.Update);
+            WriteToFifo(0);
+            WriteToFifo(0);
+            WriteToFifo(width);
+            WriteToFifo(height);
+            WaitForFifo();
+        }
+        */
+
+        uint FrameSize;
+        uint FrameOffset;
+
+        private void Init()
+        {
+            FrameSize = ReadRegister(Register.FrameBufferSize);
+            FrameOffset = ReadRegister(Register.FrameBufferOffset);
+        }
+
+        public void DoubleBuffer_SetPixel(uint x, uint y, uint color)
+        {
+            Video_Memory[((y * width + x) * depth) + FrameSize] = color;
+        }
+
+        public void DoubleBuffer_SetVRAM(int[] colors) 
+        {
+            Video_Memory.Copy((int)FrameSize, colors, 0, colors.Length);
+        }
+
+        public void DoubleBuffer_Clear(uint color)
+        {
+            Video_Memory.Fill(FrameSize, FrameSize, color);
+        }
+
+        public void DoubleBuffer_Update()
+        {
+            Video_Memory.MoveDown(FrameOffset, FrameSize, FrameSize);
+            Update(0, 0, width, height);
         }
     }
 }
