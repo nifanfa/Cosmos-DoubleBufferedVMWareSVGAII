@@ -2,7 +2,7 @@ using Cosmos.Core;
 using Cosmos.HAL;
 using System;
 
-namespace Cosmos.HAL.Drivers.PCI.Video
+namespace CosmosKernel1
 {
     /// <summary>
     /// VMWareSVGAII class.
@@ -840,10 +840,13 @@ namespace Cosmos.HAL.Drivers.PCI.Video
 
         public void DoubleBuffer_SetPixel(uint x, uint y, uint color)
         {
-            Video_Memory[((y * width + x) * depth) + FrameSize] = color;
+            if (x < width)
+            {
+                Video_Memory[((y * width + x) * depth) + FrameSize] = color;
+            }
         }
 
-        public void DoubleBuffer_SetVRAM(int[] colors) 
+        public void DoubleBuffer_SetVRAM(int[] colors)
         {
             Video_Memory.Copy((int)FrameSize, colors, 0, colors.Length);
         }
@@ -855,8 +858,202 @@ namespace Cosmos.HAL.Drivers.PCI.Video
 
         public void DoubleBuffer_Update()
         {
-            Video_Memory.MoveDown(FrameOffset, FrameSize, FrameSize);
+            try
+            {
+                Video_Memory.MoveDown(FrameOffset, FrameSize, FrameSize);
+            }
+            catch (Exception)
+            {
+            }
             Update(0, 0, width, height);
+        }
+
+        public void DoubleBuffer_DrawFillRectangle(uint x, uint y, uint width, uint height, uint color)
+        {
+            for (uint h = 0; h < height; h++)
+            {
+                for (uint w = 0; w < width; w++)
+                {
+                    DoubleBuffer_SetPixel(w + x, y + h, color);
+                }
+            }
+        }
+
+        private void DrawVerticalLine(uint color, int dy, int x1, int y1)
+        {
+            int i;
+
+            for (i = 0; i < dy; i++)
+            {
+                DoubleBuffer_SetPixel((uint)x1, (uint)(y1 + i), color);
+            }
+        }
+
+        private void DrawHorizontalLine(uint color, int dx, int x1, int y1)
+        {
+            uint i;
+
+            for (i = 0; i < dx; i++)
+            {
+                DoubleBuffer_SetPixel((uint)(x1 + i), (uint)y1, color);
+            }
+        }
+
+        protected void TrimLine(ref int x1, ref int y1, ref int x2, ref int y2)
+        {
+            // in case of vertical lines, no need to perform complex operations
+            if (x1 == x2)
+            {
+                x1 = (int)Math.Min(width - 1, Math.Max(0, x1));
+                x2 = x1;
+                y1 = (int)Math.Min(height - 1, Math.Max(0, y1));
+                y2 = (int)Math.Min(height - 1, Math.Max(0, y2));
+
+                return;
+            }
+
+            // never attempt to remove this part,
+            // if we didn't calculate our new values as floats, we would end up with inaccurate output
+            float x1_out = x1, y1_out = y1;
+            float x2_out = x2, y2_out = y2;
+
+            // calculate the line slope, and the entercepted part of the y axis
+            float m = (y2_out - y1_out) / (x2_out - x1_out);
+            float c = y1_out - m * x1_out;
+
+            // handle x1
+            if (x1_out < 0)
+            {
+                x1_out = 0;
+                y1_out = c;
+            }
+            else if (x1_out >= width)
+            {
+                x1_out = width - 1;
+                y1_out = (width - 1) * m + c;
+            }
+
+            // handle x2
+            if (x2_out < 0)
+            {
+                x2_out = 0;
+                y2_out = c;
+            }
+            else if (x2_out >= width)
+            {
+                x2_out = width - 1;
+                y2_out = (width - 1) * m + c;
+            }
+
+            // handle y1
+            if (y1_out < 0)
+            {
+                x1_out = -c / m;
+                y1_out = 0;
+            }
+            else if (y1_out >= height)
+            {
+                x1_out = (height - 1 - c) / m;
+                y1_out = height - 1;
+            }
+
+            // handle y2
+            if (y2_out < 0)
+            {
+                x2_out = -c / m;
+                y2_out = 0;
+            }
+            else if (y2_out >= height)
+            {
+                x2_out = (height - 1 - c) / m;
+                y2_out = height - 1;
+            }
+
+            // final check, to avoid lines that are totally outside bounds
+            if (x1_out < 0 || x1_out >= width || y1_out < 0 || y1_out >= height)
+            {
+                x1_out = 0; x2_out = 0;
+                y1_out = 0; y2_out = 0;
+            }
+
+            if (x2_out < 0 || x2_out >= width || y2_out < 0 || y2_out >= height)
+            {
+                x1_out = 0; x2_out = 0;
+                y1_out = 0; y2_out = 0;
+            }
+
+            // replace inputs with new values
+            x1 = (int)x1_out; y1 = (int)y1_out;
+            x2 = (int)x2_out; y2 = (int)y2_out;
+        }
+
+        public virtual void DoubleBuffer_DrawLine(uint color, int x1, int y1, int x2, int y2)
+        {
+            // trim the given line to fit inside the canvas boundries
+            TrimLine(ref x1, ref y1, ref x2, ref y2);
+
+            int dx, dy;
+
+            dx = x2 - x1;      /* the horizontal distance of the line */
+            dy = y2 - y1;      /* the vertical distance of the line */
+
+            if (dy == 0) /* The line is horizontal */
+            {
+                DrawHorizontalLine(color, dx, x1, y1);
+                return;
+            }
+
+            if (dx == 0) /* the line is vertical */
+            {
+                DrawVerticalLine(color, dy, x1, y1);
+                return;
+            }
+
+            /* the line is neither horizontal neither vertical, is diagonal then! */
+            DrawDiagonalLine(color, dx, dy, x1, y1);
+        }
+
+        private void DrawDiagonalLine(uint color, int dx, int dy, int x1, int y1)
+        {
+            int i, sdx, sdy, dxabs, dyabs, x, y, px, py;
+
+            dxabs = Math.Abs(dx);
+            dyabs = Math.Abs(dy);
+            sdx = Math.Sign(dx);
+            sdy = Math.Sign(dy);
+            x = dyabs >> 1;
+            y = dxabs >> 1;
+            px = x1;
+            py = y1;
+
+            if (dxabs >= dyabs) /* the line is more horizontal than vertical */
+            {
+                for (i = 0; i < dxabs; i++)
+                {
+                    y += dyabs;
+                    if (y >= dxabs)
+                    {
+                        y -= dxabs;
+                        py += sdy;
+                    }
+                    px += sdx;
+                    DoubleBuffer_SetPixel((uint)px, (uint)py, color);
+                }
+            }
+            else /* the line is more vertical than horizontal */
+            {
+                for (i = 0; i < dyabs; i++)
+                {
+                    x += dxabs;
+                    if (x >= dyabs)
+                    {
+                        x -= dyabs;
+                        px += sdx;
+                    }
+                    py += sdy;
+                    DoubleBuffer_SetPixel((uint)px, (uint)py, color);
+                }
+            }
         }
     }
 }
