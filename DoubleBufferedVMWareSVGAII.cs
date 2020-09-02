@@ -846,6 +846,13 @@ namespace CosmosKernel1
             }
         }
 
+        public uint DoubleBuffer_GetPixel(uint x, uint y)
+        {
+            if (x < width)
+                return Video_Memory[((y * width + x) * depth) + FrameSize];
+            return (uint)System.Drawing.Color.White.ToArgb();
+        }
+
         public void DoubleBuffer_SetVRAM(int[] colors)
         {
             Video_Memory.Copy((int)FrameSize, colors, 0, colors.Length);
